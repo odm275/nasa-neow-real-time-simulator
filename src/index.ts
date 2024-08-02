@@ -5,6 +5,7 @@ import { TypeBoxTypeProvider } from "@fastify/type-provider-typebox";
 import { Static, Type } from "@sinclair/typebox";
 import fastifyRedis from "@fastify/redis";
 import dayjs from "dayjs";
+import cors from "@fastify/cors";
 declare module "fastify" {
   interface FastifyInstance {
     config: {
@@ -43,6 +44,7 @@ const fastify = Fastify({
     },
   },
 }).withTypeProvider<TypeBoxTypeProvider>();
+
 const QueryStringSchema = Type.Object({
   start_date: Type.String(),
   end_date: Type.String(),
@@ -90,6 +92,13 @@ async function main() {
     await fastify.register(apiRoutes, { prefix: "/api" });
     await fastify.register(fastifyRedis, {
       url: fastify.config.UPSTASH_REDIS_URL,
+    });
+    await fastify.register(cors, {
+      // Configure CORS options
+      origin: "http://localhost:5173",
+      methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+      allowedHeaders: ["Content-Type", "Authorization"],
+      credentials: true,
     });
     await fastify.listen({ port: fastify.config.PORT, host: "0.0.0.0" });
     fastify.log.info(`Server listening on ${fastify.server.address()}`);

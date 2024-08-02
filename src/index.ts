@@ -3,13 +3,14 @@ import env from "@fastify/env";
 import { config } from "../config";
 import { TypeBoxTypeProvider } from "@fastify/type-provider-typebox";
 import { Static, Type } from "@sinclair/typebox";
-
+import fastifyRedis from "@fastify/redis";
+import dayjs from "dayjs";
 declare module "fastify" {
   interface FastifyInstance {
     config: {
       PORT: number;
       NASA_NEOW_API_KEY: string;
-      REDIS_URL: string;
+      UPSTASH_REDIS_URL: string;
     };
   }
 }
@@ -26,9 +27,9 @@ const options = {
       NASA_NEOW_API_KEY: {
         type: "string",
       },
-      REDIS_URL: {
+      UPSTASH_REDIS_URL: {
         type: "string",
-        default: "redis://localhost:6379",
+        default: "add a key to your .env please",
       },
     },
   },
@@ -42,7 +43,6 @@ const fastify = Fastify({
     },
   },
 }).withTypeProvider<TypeBoxTypeProvider>();
-
 const QueryStringSchema = Type.Object({
   start_date: Type.String(),
   end_date: Type.String(),
@@ -54,33 +54,49 @@ async function apiRoutes(fastify: FastifyInstance) {
     return { message: "Hello World" };
   });
 
-  fastify.get<{ Querystring: QueryStringType }>(
-    "/neow",
-    {
-      schema: {
-        querystring: QueryStringSchema,
-      },
-    },
-    async (req, res) => {
-      const { start_date } = req.query;
+  fastify.get("/neow", async (req, res) => {
+    const { redis } = fastify;
+    const dayToQuery = dayjs().format("YYYY-MM-DD");
+
+    const cacheKey = `neow:${dayToQuery}:${dayToQuery}`;
+
+    try {
+      let cacheData = await redis.get(cacheKey);
+      if (cacheData) {
+        return JSON.parse(cacheData);
+      }
 
       const searchParams = new URLSearchParams(config.neoWUrl);
       searchParams.append("api_key", fastify.config.NASA_NEOW_API_KEY);
-      searchParams.append("start_date", "2024-08-01");
-      searchParams.append("end_date", "2024-08-01");
+      searchParams.append("start_date", dayToQuery);
+      searchParams.append("end_date", dayToQuery);
 
       const url = `${config.neoWUrl}?${searchParams.toString()}`;
       const resp = await fetch(url);
       const data = await resp.json();
+      await redis.set(cacheKey, JSON.stringify(data), "EX", 86400);
+
       return data;
+    } catch (e) {
+      fastify.log.error(e, "Error in /neow route");
+      throw e; // Let Fastify handle the error response
     }
-  );
+  });
 }
 
 async function main() {
-  await fastify.register(env, options);
-  await fastify.register(apiRoutes, { prefix: "/api" });
-  await fastify.listen({ port: 3000, host: "0.0.0.0" });
+  try {
+    await fastify.register(env, options);
+    await fastify.register(apiRoutes, { prefix: "/api" });
+    await fastify.register(fastifyRedis, {
+      url: fastify.config.UPSTASH_REDIS_URL,
+    });
+    await fastify.listen({ port: fastify.config.PORT, host: "0.0.0.0" });
+    fastify.log.info(`Server listening on ${fastify.server.address()}`);
+  } catch (err) {
+    fastify.log.error(err);
+    process.exit(1);
+  }
 }
 
 ["SIGINT", "SIGTERM"].forEach((signal) => {
